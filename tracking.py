@@ -1,11 +1,16 @@
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import os
 import glob
 import subprocess
 import csv
-
+import io
+from PIL import Image
+import imageio
+from planners.rrt import RRT
 """
 Created on June 20th, 2024
 @author: Taekyung Kim
@@ -48,13 +53,13 @@ class LocalTrackingController:
         self.rotation_threshold = 0.1  # Radians
 
         self.current_goal_index = 0  # Index of the current goal in the path
-        self.reached_threshold = 0.3
+        self.reached_threshold = 0.4
         # if robot_spec specifies a different reached_threshold, use that (ex. VTOL)
         if 'reached_threshold' in robot_spec:
             self.reached_threshold = robot_spec['reached_threshold']
             print("Using custom reached_threshold: ", self.reached_threshold)
 
-        if self.robot_spec['model'] == 'SingleIntegrator2D':
+        if self.robot_spec['model'] == 'SingleIntegrator2D' or self.robot_spec['model'] == 'SingleIntegrator2DOpenLoop':
             if X0.shape[0] == 2:
                 X0 = np.array([X0[0], X0[1], 0.0]).reshape(-1, 1)
             elif X0.shape[0] != 3:
@@ -116,7 +121,18 @@ class LocalTrackingController:
         if show_animation:
             self.setup_animation_plot()
         else:
-            self.ax = plt.axes()  # dummy placeholder
+            # Create non-interactive figure for saving frames only
+            if self.ax is None or self.fig is None:
+                self.fig = plt.figure()
+                self.ax = self.fig.add_subplot(111)
+            self.ax.set_xlabel("X [m]")
+            if self.robot_spec['model'] in ['Quad2D', 'VTOL2D']:
+                self.ax.set_ylabel("Z [m]")
+            else:
+                self.ax.set_ylabel("Y [m]")
+            self.ax.set_aspect(1)
+            self.waypoints_scatter = self.ax.scatter(
+                [], [], s=10, facecolors='g', edgecolors='g', alpha=0.5)
 
         # Setup control problem
         self.setup_robot(X0)
@@ -145,7 +161,7 @@ class LocalTrackingController:
                 from attitude_control.velocity_tracking_yaw import VelocityTrackingYaw
                 self.att_controller = VelocityTrackingYaw(self.robot, self.robot_spec)
             elif self.att_controller_type == 'visibility_raycast':
-                from safe_control.attitude_control.visibility_raycast import VisibilityRayCastAtt
+                from attitude_control.visibility_raycast import VisibilityRayCastAtt
                 self.att_controller = VisibilityRayCastAtt(self.robot, self.robot_spec)
             elif self.att_controller_type == 'visibility_area':
                 from attitude_control.visibility_area import VisibilityAreaAtt
@@ -164,6 +180,7 @@ class LocalTrackingController:
         else:
             self.att_controller = None
         self.goal = None
+        self.rrt_path_line = None  # Store the plotted RRT path line
 
     def setup_animation_saving(self):
         self.current_directory_path = os.getcwd()
@@ -171,6 +188,7 @@ class LocalTrackingController:
             os.makedirs(self.current_directory_path + "/output/animations")
         self.save_per_frame = 1
         self.ani_idx = 0
+        self.frames = []  # In-memory frame storage for efficient video generation
 
     def setup_animation_plot(self):
         # Initialize plotting
@@ -194,10 +212,13 @@ class LocalTrackingController:
         self.robot = BaseRobot(
             X0.reshape(-1, 1), self.robot_spec, self.dt, self.ax)
 
-    def set_waypoints(self, waypoints):
+    def set_waypoints(self, waypoints, skip_filter=False):
         if type(waypoints) == list:
             waypoints = np.array(waypoints, dtype=float)
-        self.waypoints = self.filter_waypoints(waypoints)
+        if skip_filter:
+            self.waypoints = waypoints
+        else:
+            self.waypoints = self.filter_waypoints(waypoints)
         self.current_goal_index = 0
 
         self.goal = self.update_goal()
@@ -217,6 +238,30 @@ class LocalTrackingController:
 
         if self.show_animation:
             self.waypoints_scatter.set_offsets(self.waypoints[:, :2])
+        
+        # Also plot the path for animation/video saving
+        if self.show_animation or self.save_animation:
+            self.plot_rrt_path()
+
+    def plot_rrt_path(self):
+        """Plot the RRT path on the figure"""
+        if hasattr(self, 'rrt_path_line') and self.rrt_path_line:
+            # Remove old path line if it exists
+            self.rrt_path_line.remove()
+        
+        if self.waypoints is not None and len(self.waypoints) > 1:
+            # Plot the RRT path as a red line
+            self.rrt_path_line, = self.ax.plot(
+                self.waypoints[:, 0], 
+                self.waypoints[:, 1], 
+                '-r', 
+                linewidth=2, 
+                label='RRT Path',
+                alpha=0.7
+            )
+
+    def set_open_loop_controls(self, controls):
+        self.controls = controls
 
     def filter_waypoints(self, waypoints):
         '''
@@ -272,7 +317,7 @@ class LocalTrackingController:
         Get the nearest 5 obstacles that haven't been passed by (i.e., they're still in front of the robot or the robot should still consider the obstacle).
         '''
         
-        if self.robot_spec['model'] in ['SingleIntegrator2D', 'DoubleIntegrator2D', 'Quad2D', 'Quad3D']:
+        if self.robot_spec['model'] in ['SingleIntegrator2D', 'SingleIntegrator2DOpenLoop', 'DoubleIntegrator2D', 'Quad2D', 'Quad3D']:
             angle_unpassed=np.pi*2
         elif self.robot_spec['model'] in ['Unicycle2D', 'DynamicUnicycle2D', 'VTOL2D']:
             angle_unpassed=np.pi*1.2
@@ -435,7 +480,6 @@ class LocalTrackingController:
 
     def draw_plot(self, pause=0.01, force_save=False):
         if self.show_animation:
-
             self.fig.canvas.draw_idle()
             self.fig.canvas.flush_events()
 
@@ -447,13 +491,23 @@ class LocalTrackingController:
             #     self.fig.tight_layout()
                 
             plt.pause(pause)
-            if self.save_animation:
-                self.ani_idx += 1
-                if force_save or self.ani_idx % self.save_per_frame == 0:
-                    plt.savefig(self.current_directory_path +
-                                "/output/animations/" + "t_step_" + str(self.ani_idx//self.save_per_frame).zfill(4) + ".png", dpi=300)
-                    # plt.savefig(self.current_directory_path +
-                    #             "/output/animations/" + "t_step_" + str(self.ani_idx//self.save_per_frame).zfill(4) + ".svg")
+        
+        # Save frames to memory for efficient video export
+        if self.save_animation:
+            self.ani_idx += 1
+            if force_save or self.ani_idx % self.save_per_frame == 0:
+                # Capture frame to memory buffer
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message="Creating legend with loc")
+                    buf = io.BytesIO()
+                    self.fig.savefig(buf, format='png', dpi=150)
+                    buf.seek(0)
+                    # Convert to PIL Image then numpy array for imageio
+                    img = Image.open(buf)
+                    frame = np.array(img)
+                    self.frames.append(frame)
+                    buf.close()
 
     def control_step(self):
         '''
@@ -495,7 +549,10 @@ class LocalTrackingController:
             u_ref = self.robot.stop()
         else:
             # Normal waypoint tracking
-            if self.pos_controller_type == 'optimal_decay_cbf_qp':
+            if self.robot_spec['model'] in ['SingleIntegrator2DOpenLoop']:
+                print(f"current_goal_index: {self.current_goal_index}")
+                u_ref = self.robot.nominal_input(self.goal, controls = self.controls, goal_index=self.current_goal_index)
+            elif self.pos_controller_type == 'optimal_decay_cbf_qp':
                 u_ref = self.robot.nominal_input(self.goal, k_omega=3.0, k_a=0.5, k_v=0.5)
             else:
                 u_ref = self.robot.nominal_input(self.goal)
@@ -511,7 +568,10 @@ class LocalTrackingController:
         else:
             u = self.pos_controller.solve_control_problem(
                 self.robot.X, control_ref, self.nearest_multi_obs)
-        plt.figure(self.fig.number)
+        
+        # Only set active figure if showing animation
+        if self.show_animation:
+            plt.figure(self.fig.number)
 
         # 6. Update the attitude controller
         if self.state_machine == 'track' and self.att_controller is not None:
@@ -533,7 +593,8 @@ class LocalTrackingController:
         self.robot.step(u, self.u_att)
         self.u_pos = u
     
-        if self.show_animation:
+        # Render robot for animation or video saving
+        if self.show_animation or self.save_animation:
             self.robot.render_plot()
 
         # 9. Update sensing information
@@ -564,18 +625,24 @@ class LocalTrackingController:
             self.draw_plot(pause=5, force_save=True)
 
     def export_video(self):
-        # convert the image sequence to a video
-        if self.show_animation and self.save_animation:
-            subprocess.call(['ffmpeg',
-                             '-framerate', '30',  # Input framerate (adjust if needed)
-                             '-i', self.current_directory_path + "/output/animations/t_step_%04d.png",
-                             '-vf', 'scale=1920:982,fps=60',  # Ensure height is divisible by 2 and set output framerate
-                             '-pix_fmt', 'yuv420p',
-                             self.current_directory_path + "/output/animations/tracking.mp4"])
-
-            for file_name in glob.glob(self.current_directory_path +
-                                       "/output/animations/*.png"):
-                os.remove(file_name)
+        # Export in-memory frames directly to video using imageio
+        if self.save_animation and len(self.frames) > 0:
+            output_path = self.current_directory_path + "/output/animations/tracking.mp4"
+            print(f"Exporting video with {len(self.frames)} frames to {output_path}...")
+            
+            # Write video using imageio - much faster than PNG+ffmpeg approach
+            imageio.mimsave(
+                output_path, 
+                self.frames, 
+                fps=60,
+                codec='libx264',
+                quality=8,  # 0-10, higher is better quality
+                pixelformat='yuv420p'  # Ensures compatibility
+            )
+            
+            # Clear frames to free memory
+            self.frames = []
+            print(f"Video exported successfully to {output_path}")
 
     # # If the 'upper' function is not compatible with your device, please use the function provided below
     # def export_video(self):
@@ -630,34 +697,48 @@ class LocalTrackingController:
 
         print("=====   Tracking finished    =====")
         print("===================================\n")
+        
+        # Only turn off interactive mode if it was on
         if self.show_animation:
             plt.ioff()
-            plt.close()
+        
+        # Always close the figure
+        plt.close(self.fig)
 
         return unexpected_beh
 
 
 def single_agent_main(controller_type):
     dt = 0.05
-    model = 'DynamicUnicycle2D' # SingleIntegrator2D, DynamicUnicycle2D, KinematicBicycle2D, DoubleIntegrator2D, Quad2D, Quad3D, VTOL2D
-
+    model = 'SingleIntegrator2DOpenLoop' # SingleIntegrator2D, DynamicUnicycle2D, KinematicBicycle2D, DoubleIntegrator2D, Quad2D, Quad3D, VTOL2D
+    print(f"Robot model: {model}")
+   # waypoints = [
+   #     [2, 2, math.pi/2],
+   #     [2, 12, 0],
+   #     [12, 12, 0],
+   #     [12, 2, 0]
+   # ]
     waypoints = [
         [2, 2, math.pi/2],
-        [2, 12, 0],
-        [12, 12, 0],
-        [12, 2, 0]
+        [12, 12, 0]
     ]
-
     # Define static obs
-    known_obs = np.array([[2.2, 5.0, 0.2], [3.0, 5.0, 0.2], [4.0, 9.0, 0.3], [1.5, 10.0, 0.5], [9.0, 11.0, 1.0], [7.0, 7.0, 3.0], [4.0, 3.5, 1.5],
-                        [10.0, 7.3, 0.4],
-                        [6.0, 13.0, 0.7], [5.0, 10.0, 0.6], [11.0, 5.0, 0.8], [13.5, 11.0, 0.6]])
-
+    #known_obs = np.array([[2.2, 5.0, 0.2], [3.0, 5.0, 0.2], [4.0, 9.0, 0.3], [1.5, 10.0, 0.5], [9.0, 11.0, 1.0], [7.0, 7.0, 3.0], [4.0, 3.5, 1.5],
+     #                   [10.0, 7.3, 0.4],
+      #                  [6.0, 13.0, 0.7], [5.0, 10.0, 0.6], [11.0, 5.0, 0.8], [13.5, 11.0, 0.6]])
+    known_obs = np.array([[9.0, 7.0, 1.5], [6.3, 8.7, 1.5],
+              ])
     env_width = 14.0
     env_height = 14.0
     if model == 'SingleIntegrator2D':
         robot_spec = {
             'model': 'SingleIntegrator2D',
+            'v_max': 1.0,
+            'radius': 0.25
+        }
+    elif model == 'SingleIntegrator2DOpenLoop':
+        robot_spec = {
+            'model': 'SingleIntegrator2DOpenLoop',
             'v_max': 1.0,
             'radius': 0.25
         }
@@ -754,7 +835,7 @@ def single_agent_main(controller_type):
 
     waypoints = np.array(waypoints, dtype=np.float64)
 
-    if model in ['SingleIntegrator2D', 'DoubleIntegrator2D', 'Quad2D', 'Quad3D']:
+    if model in ['SingleIntegrator2D', 'SingleIntegrator2DOpenLoop', 'DoubleIntegrator2D', 'Quad2D', 'Quad3D']:
         x_init = waypoints[0]
     elif model == 'VTOL2D':
         v_init = robot_spec['v_max'] # m/s
@@ -772,17 +853,48 @@ def single_agent_main(controller_type):
     tracking_controller = LocalTrackingController(x_init, robot_spec,
                                                   controller_type=controller_type,
                                                   dt=dt,
-                                                  show_animation=True,
-                                                  save_animation=False,
+                                                  show_animation=False,
+                                                  save_animation=True,
                                                   show_mpc_traj=False,
+                                                  enable_rotation=False,
                                                   ax=ax, fig=fig,
                                                   env=env_handler)
+    
+    expert_planner = RRT(x_init, robot_spec,
+                        dt=dt,
+                        show_animation=True,
+                        ax=ax, fig=fig,
+                        env=env_handler,
+                        max_iter=2000,
+                        goal_sample_rate=0.5,
+                        expand_dis=0.3,
+                        path_resolution=0.05,
+                        goal_threshold=0.3)
 
     # Set obstacles
     tracking_controller.obs = known_obs
     # tracking_controller.set_unknown_obs(unknown_obs)
-    tracking_controller.set_waypoints(waypoints)
-    unexpected_beh = tracking_controller.run_all_steps(tf=100)
+    
+    # Use RRT to plan a dynamically feasible path
+    print("===================================")
+    print("=========== RRT Planning ==========")
+    rrt_path, controls = expert_planner.plan(
+        start=x_init,
+        goal=waypoints[-1][:2],  # Goal position [x, y]
+        obstacle_list=known_obs
+    )
+    #rrt_path=None
+    if rrt_path is not None:
+        print(f"RRT found path with {len(rrt_path)} waypoints")
+        # Use RRT path as waypoints for tracking
+        tracking_controller.set_waypoints(rrt_path, skip_filter=True)
+        tracking_controller.set_open_loop_controls(controls)
+    else:
+        print("RRT failed to find path, using original waypoints")
+        tracking_controller.set_waypoints(waypoints)
+        return
+    
+    unexpected_beh = tracking_controller.run_all_steps(tf=30)
 
 def multi_agent_main(controller_type, save_animation=False):
     dt = 0.05
@@ -865,7 +977,7 @@ if __name__ == "__main__":
     from utils import env
     import math
 
-    #single_agent_main(controller_type={'pos': 'cbf_qp'})
-    single_agent_main(controller_type={'pos': 'mpc_cbf'})
+    single_agent_main(controller_type={'pos': 'cbf_qp'})
+    #single_agent_main(controller_type={'pos': 'mpc_cbf'})
     # single_agent_main(controller_type={'pos': 'mpc_cbf', 'att': 'gatekeeper'}) # only Integrators have attitude controller, otherwise ignored
     

@@ -4,6 +4,9 @@ import matplotlib.patches as patches
 
 from shapely.geometry import Polygon, Point, LineString
 from shapely import is_valid_reason
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from utils.geometry import custom_merge
 
 """
@@ -65,6 +68,15 @@ class BaseRobot:
             except ImportError:
                 from robots.single_integrator2D import SingleIntegrator2D
             self.robot = SingleIntegrator2D(dt, robot_spec)
+            # X0: [x, y]
+            self.set_orientation(self.X[2, 0])
+            self.X = self.X[0:2]
+        elif self.robot_spec['model'] == 'SingleIntegrator2DOpenLoop':
+            try:
+                from single_integrator2D import SingleIntegrator2DOpenLoop
+            except ImportError:
+                from robots.single_integrator2D import SingleIntegrator2DOpenLoop
+            self.robot = SingleIntegrator2DOpenLoop(dt, robot_spec)
             # X0: [x, y]
             self.set_orientation(self.X[2, 0])
             self.X = self.X[0:2]
@@ -349,9 +361,11 @@ class BaseRobot:
     def g_casadi(self, X):
         return self.robot.g(X, casadi=True)
 
-    def nominal_input(self, goal, d_min=0.05, k_omega = 2.0, k_a = 1.0, k_v = 1.0):
+    def nominal_input(self, goal, d_min=0.05, k_omega = 2.0, k_a = 1.0, k_v = 1.0, controls=None, goal_index=None):
         if self.robot_spec['model'] == 'SingleIntegrator2D':
             return self.robot.nominal_input(self.X, goal, d_min, k_v)
+        elif self.robot_spec['model'] == 'SingleIntegrator2DOpenLoop':
+            return self.robot.nominal_input(controls, goal_index)
         elif self.robot_spec['model'] in ['Unicycle2D']:
             return self.robot.nominal_input(self.X, goal, d_min, k_omega, k_v)
         elif self.robot_spec['model'] in ['DynamicUnicycle2D', 'KinematicBicycle2D', 'KinematicBicycle2D_C3BF', 'KinematicBicycle2D_DPCBF']:
