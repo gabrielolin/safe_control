@@ -20,18 +20,18 @@ class RRT:
             self.control = None  # Control input that led to this node
             self.cost = 0.0
     
-    def __init__(self, X0, robot_spec, dt=0.05, 
+    def __init__(self, robot = None, X0 = None, robot_spec=None, dt=0.05, 
                  show_animation=False,
                  ax=None, fig=None, env=None,
                  max_iter=2000, goal_sample_rate=0.15, 
-                 expand_dis=0.3, path_resolution=0.05, goal_threshold=0.5):
+                 expand_dis=0.3, goal_threshold=0.5):
         """
         Initialize RRT planner with same interface as LocalTrackingController
         
         Args:
+            robot: Robot object
             X0: Initial state
             robot_spec: Robot specification dictionary
-            controller_type: Controller type (not used by planner but kept for compatibility)
             dt: Time step for integration
             show_animation: Whether to show animation
             raise_error: Raise error on failure
@@ -41,7 +41,6 @@ class RRT:
             max_iter: Maximum RRT iterations
             goal_sample_rate: Probability of sampling goal
             expand_dis: Distance to extend tree
-            path_resolution: Resolution for collision
             goal_threshold: Distance threshold for reaching goal
         """
         self.robot_spec = robot_spec
@@ -55,12 +54,11 @@ class RRT:
         self.max_iter = max_iter
         self.goal_sample_rate = goal_sample_rate
         self.expand_dis = expand_dis
-        self.path_resolution = path_resolution
         self.goal_threshold = goal_threshold
         
         # Extract dynamics properties from robot_spec
         self.model = robot_spec['model']
-        if self.model == 'SingleIntegrator2D' or self.model == 'SingleIntegrator2DOpenLoop':
+        if self.model == 'SingleIntegrator2D' or self.model == 'SingleIntegrator2DOpenLoop' or self.model == 'SingleIntegrator2DMLP':
             self.state_dim = 2  # [x, y]
             self.control_dim = 2  # [vx, vy]
             self.v_max = robot_spec.get('v_max', 1.0)
@@ -83,8 +81,10 @@ class RRT:
         self.robot_radius = robot_spec.get('radius', 0.25)
         
         # Initialize robot dynamics
-        self._setup_robot(X0)
-        
+        if robot is None:
+            self._setup_robot(X0)
+        else:
+            self.robot = robot
         # Tree storage
         self.node_list = []
         self.obstacles = []
@@ -111,52 +111,7 @@ class RRT:
             Returns (None, None) if no path found
         """
         # Switch to interactive backend for RRT visualization
-        original_backend = matplotlib.get_backend()
-        if self.show_animation and original_backend.lower() == 'agg':
-            # Save current figure number before switching
-            old_fig_num = self.fig.number if self.fig is not None else None
-            
-            # Switch to interactive backend
-            matplotlib.use('TkAgg', force=True)
-            plt.ion()
-            print(f"RRT: Switched from {original_backend} to TkAgg for interactive visualization")
-            
-            # Recreate the figure with TkAgg backend, copying the old figure's content
-            if old_fig_num is not None and self.fig is not None:
-                # Get the old figure's renderer and content
-                new_fig = plt.figure(figsize=self.fig.get_size_inches())
-                new_ax = new_fig.add_subplot(111)
-                
-                # Copy axes properties
-                new_ax.set_xlim(self.ax.get_xlim())
-                new_ax.set_ylim(self.ax.get_ylim())
-                new_ax.set_xlabel(self.ax.get_xlabel())
-                new_ax.set_ylabel(self.ax.get_ylabel())
-                new_ax.set_aspect(self.ax.get_aspect())
-                
-                # Copy all the plot elements (obstacles, etc.)
-                for child in self.ax.get_children():
-                    if isinstance(child, patches.Circle):
-                        new_ax.add_patch(patches.Circle(
-                            child.center, child.radius,
-                            edgecolor=child.get_edgecolor(),
-                            facecolor=child.get_facecolor(),
-                            fill=child.get_fill(),
-                            alpha=child.get_alpha()
-                        ))
-                    elif isinstance(child, patches.Rectangle):
-                        new_ax.add_patch(patches.Rectangle(
-                            child.get_xy(), child.get_width(), child.get_height(),
-                            edgecolor=child.get_edgecolor(),
-                            facecolor=child.get_facecolor(),
-                            fill=child.get_fill(),
-                            alpha=child.get_alpha()
-                        ))
-                
-                # Update references
-                self.fig = new_fig
-                self.ax = new_ax
-                plt.show(block=False)
+        original_backend = self._setup_visualization()
         
         # Initialize
         self.start = self.Node(self._state_to_node(start))
@@ -192,28 +147,30 @@ class RRT:
                     print(f"RRT: Goal reached in {i} iterations!")
                     waypoints, controls = self._generate_final_path(new_node)
                     if self.show_animation:
-                        self._draw_final_path(waypoints)
-                        print("RRT: Planning complete. Close the window to continue...")
-                        # Keep window open longer to show final path
-                        plt.pause(2.0)
-                        # Switch back to original backend after planning
-                        if original_backend.lower() == 'agg':
-                            plt.ioff()
-                            matplotlib.use('Agg', force=True)
-                            print(f"RRT: Switched back to {original_backend}")
-                    return waypoints, controls
+                        self._draw_final_path(waypoints, pause_time=2.0)
+                        self._cleanup_visualization(original_backend)
+                    return waypoints, controls, True
                 
                 if self.show_animation and i % 50 == 0:
                     self._draw_graph(new_node)
         
-        print(f"RRT: Max iterations reached ({self.max_iter}), no path found")
+        # Max iterations reached - return path to nearest node to goal
+        print(f"RRT: Max iterations reached ({self.max_iter}), returning path to nearest node")
+        
+        # Find node closest to goal
+        nearest_to_goal = min(self.node_list, 
+                             key=lambda n: np.linalg.norm(n.state[:2, 0] - self.goal.state[:2, 0]))
+        
+        dist_to_goal = np.linalg.norm(nearest_to_goal.state[:2, 0] - self.goal.state[:2, 0])
+        print(f"RRT: Nearest node is {dist_to_goal:.2f}m from goal")
+        
+        waypoints, controls = self._generate_final_path(nearest_to_goal)
+
         if self.show_animation:
-            # Switch back to original backend
-            if original_backend.lower() == 'agg':
-                plt.ioff()
-                matplotlib.use('Agg', force=True)
-                print(f"RRT: Switched back to {original_backend}")
-        return None, None
+            self._draw_final_path(waypoints, pause_time=1.0)
+            self._cleanup_visualization(original_backend)
+        
+        return waypoints, controls, False
     
     def _state_to_node(self, state):
         """Convert state to node representation"""
@@ -266,21 +223,24 @@ class RRT:
         min_idx = np.argmin(dists)
         return self.node_list[min_idx]
     
-    def _steer(self, from_node, to_state, n_steps=10):
+    def _steer(self, from_node, to_state, n_steps=3):
         """
-        Steer from from_node toward to_state using robot dynamics
-        Returns new node if successful, None otherwise
+        Steer from from_node toward to_state using robot dynamics.
+        Creates intermediate nodes at each dt step for dense trajectory.
+        
+        Returns final node if successful, None otherwise.
+        Intermediate nodes are linked via parent pointers for supervision.
         """
         # Compute control input to steer toward target
         current_state = from_node.state.copy()
         
         # Compute desired control
-        if self.model == 'SingleIntegrator2D' or self.model == 'SingleIntegrator2DOpenLoop':
+        if self.model == 'SingleIntegrator2D' or self.model == 'SingleIntegrator2DOpenLoop' or self.model == 'SingleIntegrator2DMLP':
             # Direct velocity control
             direction = to_state[:2] - current_state[:2, 0]
             dist = np.linalg.norm(direction)
             if dist < 1e-6:
-                return np.array([0.0, 0.0]).reshape(-1, 1)
+                return None
             direction = direction / dist
             u = direction * self.v_max
             
@@ -305,24 +265,29 @@ class RRT:
                 return None
             u = direction / dist * self.expand_dis
         
-        # Integrate dynamics for multiple steps
+        # Integrate dynamics for multiple steps, creating intermediate nodes
         u = u.reshape(-1, 1)
         new_state = current_state.copy()
+        parent_node = from_node
         
-        for _ in range(n_steps):
+        for step in range(n_steps):
             # Use robot dynamics: dx/dt = f(x) + g(x) * u
             # Note: robot dynamics are accessed through self.robot.robot
             f_x = self.robot.robot.f(new_state)
             g_x = self.robot.robot.g(new_state)
             new_state = new_state + (f_x + g_x @ u) * self.dt
+            
+            # Create intermediate node for this dt step
+            intermediate_node = self.Node(new_state.copy())
+            intermediate_node.parent = parent_node
+            intermediate_node.control = u.copy()
+            intermediate_node.cost = parent_node.cost + np.linalg.norm(new_state[:2] - parent_node.state[:2])
+            
+            # Update parent for next iteration
+            parent_node = intermediate_node
         
-        # Create new node
-        new_node = self.Node(new_state)
-        new_node.parent = from_node
-        new_node.control = u
-        new_node.cost = from_node.cost + np.linalg.norm(new_state[:2] - current_state[:2])
-        
-        return new_node
+        # Return the final node (parent_node is now the last intermediate node)
+        return parent_node
     
     def _check_collision(self, node):
         """Check if node is collision-free"""
@@ -425,22 +390,93 @@ class RRT:
         
         plt.pause(0.01)
     
-    def _draw_final_path(self, path):
-        """Draw final path"""
-        if self.ax is None or path is None or not self.show_animation:
+    def _setup_visualization(self):
+        """Setup visualization backend and figure for RRT animation.
+        
+        Returns:
+            original_backend: String name of the original matplotlib backend
+        """
+        original_backend = matplotlib.get_backend()
+        
+        if not self.show_animation:
+            return original_backend
+        
+        if original_backend.lower() == 'agg':
+            # Save current figure number before switching
+            old_fig_num = self.fig.number if self.fig is not None else None
+            
+            # Switch to interactive backend
+            matplotlib.use('TkAgg', force=True)
+            plt.ion()
+            print(f"RRT: Switched from {original_backend} to TkAgg for interactive visualization")
+            
+            # Recreate the figure with TkAgg backend, copying the old figure's content
+            if old_fig_num is not None and self.fig is not None:
+                # Get the old figure's renderer and content
+                new_fig = plt.figure(figsize=self.fig.get_size_inches())
+                new_ax = new_fig.add_subplot(111)
+                
+                # Copy axes properties
+                new_ax.set_xlim(self.ax.get_xlim())
+                new_ax.set_ylim(self.ax.get_ylim())
+                new_ax.set_xlabel(self.ax.get_xlabel())
+                new_ax.set_ylabel(self.ax.get_ylabel())
+                new_ax.set_aspect(self.ax.get_aspect())
+                
+                # Copy all the plot elements (obstacles, etc.)
+                for child in self.ax.get_children():
+                    if isinstance(child, patches.Circle):
+                        new_ax.add_patch(patches.Circle(
+                            child.center, child.radius,
+                            edgecolor=child.get_edgecolor(),
+                            facecolor=child.get_facecolor(),
+                            fill=child.get_fill(),
+                            alpha=child.get_alpha()
+                        ))
+                    elif isinstance(child, patches.Rectangle):
+                        new_ax.add_patch(patches.Rectangle(
+                            child.get_xy(), child.get_width(), child.get_height(),
+                            edgecolor=child.get_edgecolor(),
+                            facecolor=child.get_facecolor(),
+                            fill=child.get_fill(),
+                            alpha=child.get_alpha()
+                        ))
+                
+                # Update references
+                self.fig = new_fig
+                self.ax = new_ax
+                plt.show(block=False)
+        
+        return original_backend
+    
+    def _cleanup_visualization(self, original_backend):
+        """Restore original matplotlib backend after visualization.
+        
+        Args:
+            original_backend: String name of the original matplotlib backend
+        """
+        if not self.show_animation:
             return
         
+        if original_backend.lower() == 'agg':
+            plt.ioff()
+            matplotlib.use('Agg', force=True)
+            print(f"RRT: Switched back to {original_backend}")
+    
+    def _draw_final_path(self, path, pause_time=1.0):
+        """Draw final path on the visualization.
+        
+        Args:
+            path: numpy array of waypoints
+            pause_time: Time to pause and display the path (seconds)
+        """
+        if not self.show_animation or self.ax is None or path is None:
+            return
+        
+        print("RRT: Planning complete. Close the window to continue...")
         plt.figure(self.fig.number)
         self.ax.plot(path[:, 0], path[:, 1], '-r', linewidth=3, label='RRT Path')
         self.ax.legend()
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
-        plt.pause(0.1)
-
-
-   
-
-
-    
-
-
+        plt.pause(pause_time)

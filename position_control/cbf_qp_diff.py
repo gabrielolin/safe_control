@@ -33,7 +33,7 @@ class CBFQPDIFF:
             ).to(device)
         else:
             # Use fixed alpha parameters (backward compatibility)
-            if self.robot_spec['model'] == "SingleIntegrator2D":
+            if self.robot_spec['model'] == "SingleIntegrator2D" or self.robot_spec['model'] == "SingleIntegrator2DMLP":
                 self.cbf_param['alpha'] = 1.0
             elif self.robot_spec['model'] == 'Unicycle2D':
                 self.cbf_param['alpha'] = 1.0
@@ -68,7 +68,7 @@ class CBFQPDIFF:
         self.b1 = cp.Parameter((self.num_obs, 1), value=np.zeros((self.num_obs, 1)))
         objective = cp.Minimize(cp.sum_squares(self.u - self.u_ref))
 
-        if self.robot_spec['model'] == 'SingleIntegrator2D':
+        if self.robot_spec['model'] == 'SingleIntegrator2D' or self.robot_spec['model'] == 'SingleIntegrator2DMLP':
             constraints = [self.A1 @ self.u + self.b1 >= 0,
                            cp.abs(self.u[0]) <=  self.robot_spec['v_max'],
                            cp.abs(self.u[1]) <=  self.robot_spec['v_max']]
@@ -110,7 +110,7 @@ class CBFQPDIFF:
 
         self.cbf_controller = cp.Problem(objective, constraints)
 
-    def solve_control_problem(self, robot_state, control_ref, obs_list):
+    def solve_control_problem(self, robot_state, control_ref, obs_list, return_torch=False):
         """
         Solve CBF-QP using qpth differentiable QP solver with learnable K-class function.
         
@@ -123,9 +123,15 @@ class CBFQPDIFF:
             u_safe: torch.Tensor with gradients w.r.t. barrier values h
         """
         # Convert numpy to torch tensors
-        u_ref_np = control_ref['u_ref']
-        # Flatten u_ref to 1D array (n_controls,) for proper qpth format
-        u_ref_torch = torch.tensor(u_ref_np.flatten(), dtype=torch.float32, device=self.device)
+        u_ref_input = control_ref
+        
+        # Handle both numpy and torch tensor inputs
+        if isinstance(u_ref_input, torch.Tensor):
+            u_ref_torch = u_ref_input.flatten().to(self.device)
+            u_ref_np = u_ref_input.detach().cpu().numpy().flatten()
+        else:
+            u_ref_np = u_ref_input.flatten()
+            u_ref_torch = torch.tensor(u_ref_np, dtype=torch.float32, device=self.device)
         
         # Initialize constraint matrices
         n_controls = 2 if self.robot_spec['model'] != 'Quad3D' else 4
@@ -141,7 +147,7 @@ class CBFQPDIFF:
                 continue
                 
             # Compute barrier function and gradients
-            if self.robot_spec['model'] in ['SingleIntegrator2D', 'Unicycle2D', 'KinematicBicycle2D_C3BF', 'KinematicBicycle2D_DPCBF', 'Quad3D']:
+            if self.robot_spec['model'] in ['SingleIntegrator2D', 'SingleIntegrator2DMLP', 'Unicycle2D', 'KinematicBicycle2D_C3BF', 'KinematicBicycle2D_DPCBF', 'Quad3D']:
                 h, dh_dx = self.robot.agent_barrier(obs)
                 A_cbf = dh_dx @ self.robot.g()  # (1, n_controls)
                 
@@ -182,7 +188,7 @@ class CBFQPDIFF:
             b1_list.append(b_cbf)  # Scalar value
         
         # Build control bound constraints
-        if self.robot_spec['model'] == 'SingleIntegrator2D':
+        if self.robot_spec['model'] == 'SingleIntegrator2D' or self.robot_spec['model'] == 'SingleIntegrator2DMLP':
             v_max = self.robot_spec['v_max']
             # u_min <= u <= u_max  =>  [-I; I] @ u <= [u_max; -u_min]
             A_bounds = np.vstack([np.eye(2), -np.eye(2)])  # (4, 2)
@@ -238,15 +244,25 @@ class CBFQPDIFF:
             self.u_safe = u_safe
             self.status = 'optimal'
             
-            return u_safe.detach().cpu().numpy().reshape(-1, 1)
+                    # Return based on mode
+            if return_torch:
+                return u_safe  # Return tensor with gradients for training
+            else:
+                return u_safe.detach().cpu().numpy().reshape(-1, 1)  # Numpy for execution
             
         except Exception as e:
-            print(f"qpth QP solve failed: {e}")
+            # print(f"qpth QP solve failed: {e}")  # Suppressed for clean output
             self.status = 'failed'
             # Fallback to nominal control
             # Also set u_safe for gradient flow (even though it's just u_ref)
-            self.u_safe = u_ref_torch.clone().detach().requires_grad_(True)
-            return u_ref_np
+        # Fallback to nominal control
+            if return_torch:
+                self.u_safe = u_ref_torch
+                return u_ref_torch  # Return with gradients
+            else:
+                self.u_safe = u_ref_np
+                return u_ref_np
+                
     
     def get_gradients(self):
         """
