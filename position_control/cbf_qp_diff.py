@@ -150,7 +150,7 @@ class CBFQPDIFF:
             if self.robot_spec['model'] in ['SingleIntegrator2D', 'SingleIntegrator2DMLP', 'Unicycle2D', 'KinematicBicycle2D_C3BF', 'KinematicBicycle2D_DPCBF', 'Quad3D']:
                 h, dh_dx = self.robot.agent_barrier(obs)
                 A_cbf = dh_dx @ self.robot.g()  # (1, n_controls)
-                
+                #print(f"Barrier h for obs {i}: {h}")
                 # Convert h to torch tensor for learnable K-class function
                 h_torch = torch.tensor([[h]], dtype=torch.float32, device=self.device, requires_grad=True)
                 h_values.append(h_torch)
@@ -251,7 +251,7 @@ class CBFQPDIFF:
                 return u_safe.detach().cpu().numpy().reshape(-1, 1)  # Numpy for execution
             
         except Exception as e:
-            # print(f"qpth QP solve failed: {e}")  # Suppressed for clean output
+            #print(f"qpth QP solve failed: {e}")  # Suppressed for clean output
             self.status = 'failed'
             # Fallback to nominal control
             # Also set u_safe for gradient flow (even though it's just u_ref)

@@ -95,7 +95,7 @@ class RRT:
         from robots.robot import BaseRobot
         self.robot = BaseRobot(X0.reshape(-1, 1), self.robot_spec, self.dt, self.ax)
     
-    def plan(self, start, goal, obstacle_list):
+    def plan(self, start, goal, obstacle_list, warm_start=False):
         """
         Plan a dynamically feasible path from start to goal
         
