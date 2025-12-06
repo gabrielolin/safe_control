@@ -2,7 +2,7 @@ import os
 import numpy as np
 import torch
 import cvxpy as cp
-from qpth.qp import QPFunction
+from qpth.qp import QPFunction, QPSolvers
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 from policies.kappa_nn import MonotoneKappaNN
@@ -34,7 +34,7 @@ class CBFQPDIFF:
         else:
             # Use fixed alpha parameters (backward compatibility)
             if self.robot_spec['model'] == "SingleIntegrator2D" or self.robot_spec['model'] == "SingleIntegrator2DMLP":
-                self.cbf_param['alpha'] = 1.0
+                self.cbf_param['alpha'] = 0.1
             elif self.robot_spec['model'] == 'Unicycle2D':
                 self.cbf_param['alpha'] = 1.0
             elif self.robot_spec['model'] == 'DynamicUnicycle2D':
@@ -57,7 +57,7 @@ class CBFQPDIFF:
                 self.cbf_param['alpha'] = 1.5
 
         # Initialize qpth solver
-        self.qp_solver = QPFunction(verbose=False, solver=2)
+        self.qp_solver = QPFunction(verbose=False, solver=QPSolvers.CVXPY)
         
         self.setup_control_problem()
 
@@ -251,7 +251,7 @@ class CBFQPDIFF:
                 return u_safe.detach().cpu().numpy().reshape(-1, 1)  # Numpy for execution
             
         except Exception as e:
-            #print(f"qpth QP solve failed: {e}")  # Suppressed for clean output
+            print(f"qpth QP solve failed: {e}")  # Suppressed for clean output
             self.status = 'failed'
             # Fallback to nominal control
             # Also set u_safe for gradient flow (even though it's just u_ref)
