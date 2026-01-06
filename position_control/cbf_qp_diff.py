@@ -34,7 +34,7 @@ class CBFQPDIFF:
         else:
             # Use fixed alpha parameters (backward compatibility)
             if self.robot_spec['model'] == "SingleIntegrator2D" or self.robot_spec['model'] == "SingleIntegrator2DMLP":
-                self.cbf_param['alpha'] = 0.1
+                self.cbf_param['alpha'] = 1.0
             elif self.robot_spec['model'] == 'Unicycle2D':
                 self.cbf_param['alpha'] = 1.0
             elif self.robot_spec['model'] == 'DynamicUnicycle2D':
@@ -230,7 +230,6 @@ class CBFQPDIFF:
         G_torch = torch.from_numpy(G).float().to(self.device).unsqueeze(0)  # (1, n_ineq, n_controls)
         h_torch = torch.from_numpy(h).float().to(self.device).unsqueeze(0)  # (1, n_ineq)
         
-        # qpth requires equality constraints A and b (even if empty)
         A_torch = torch.empty(1, 0, n_controls, dtype=torch.float32, device=self.device)  # (1, 0, n_controls)
         b_torch = torch.empty(1, 0, dtype=torch.float32, device=self.device)  # (1, 0)
         
@@ -244,18 +243,15 @@ class CBFQPDIFF:
             self.u_safe = u_safe
             self.status = 'optimal'
             
-                    # Return based on mode
             if return_torch:
                 return u_safe  # Return tensor with gradients for training
             else:
-                return u_safe.detach().cpu().numpy().reshape(-1, 1)  # Numpy for execution
+                return u_safe.detach().cpu().numpy().reshape(-1, 1) 
             
         except Exception as e:
-            print(f"qpth QP solve failed: {e}")  # Suppressed for clean output
+            print(f"qpth QP solve failed: {e}")  
             self.status = 'failed'
             # Fallback to nominal control
-            # Also set u_safe for gradient flow (even though it's just u_ref)
-        # Fallback to nominal control
             if return_torch:
                 self.u_safe = u_ref_torch
                 return u_ref_torch  # Return with gradients
@@ -263,45 +259,8 @@ class CBFQPDIFF:
                 self.u_safe = u_ref_np
                 return u_ref_np
                 
-    
-    def get_gradients(self):
-        """
-        [OPTIONAL] Explicitly compute gradients of the QP solution w.r.t. barrier values h.
-        
-        NOTE: You typically DON'T need to call this! The QPFunction automatically handles
-        the backward pass. Just call loss.backward() and gradients will flow through.
-        
-        This method is useful for debugging/analysis to inspect ∂u*/∂h directly.
-        
-        Usage:
-            u_safe = solver.solve_control_problem(...)
-            loss = criterion(solver.u_safe, target)  # u_safe is torch tensor
-            loss.backward()  # Gradients flow automatically through QPFunction!
-            # optimizer.step()
-        
-        Returns:
-            grads: list of torch.Tensor, gradients ∂u*/∂h for each barrier value
-        """
-        if not hasattr(self, 'u_safe') or not hasattr(self, 'h_values'):
-            return None
-        
-        grads = []
-        for h_val in self.h_values:
-            if h_val.requires_grad:
-                # Compute gradient of u_safe w.r.t. h
-                # NOTE: This is for analysis only. In training, gradients flow automatically.
-                grad = torch.autograd.grad(
-                    self.u_safe.sum(), h_val, 
-                    retain_graph=True, create_graph=True
-                )[0]
-                grads.append(grad)
-        
-        return grads
-    
     def get_kappa_parameters(self):
         """
-        Get parameters of the learnable K-class function for optimization.
-        
         Returns:
             parameters: iterator of torch.nn.Parameter
         """
@@ -322,21 +281,3 @@ class CBFQPDIFF:
             self.kappa_nn.load_state_dict(torch.load(path))
             print(f"Loaded learned K-class function from {path}")
     
-    def evaluate_kappa(self, h_values):
-        """
-        Evaluate the learned K-class function on given barrier values.
-        
-        Args:
-            h_values: numpy array or torch tensor of barrier values
-        
-        Returns:
-            kappa(h): torch tensor of K-class function outputs
-        """
-        if not self.use_learnable_kappa:
-            raise ValueError("Kappa NN not initialized. Set use_learnable_kappa=True.")
-        
-        if isinstance(h_values, np.ndarray):
-            h_values = torch.tensor(h_values, dtype=torch.float32, device=self.device)
-        
-        with torch.no_grad():
-            return self.kappa_nn(h_values.reshape(-1, 1))
