@@ -30,7 +30,7 @@ def angle_normalize(x):
 
 class BaseRobot:
 
-    def __init__(self, X0, robot_spec, dt, ax, policy=None):
+    def __init__(self, X0, robot_spec, dt, ax, policy=None, device='cpu'):
         '''
         X0: initial state
         dt: simulation time step
@@ -40,6 +40,7 @@ class BaseRobot:
         self.X = X0.reshape(-1, 1)
         self.dt = dt
         self.robot_spec = robot_spec
+        self.device = device
 
         self.robot_spec.setdefault('robot_id', 0)
         self.robot_spec.setdefault('exploration', False)
@@ -85,7 +86,7 @@ class BaseRobot:
                 from single_integrator2D import SingleIntegrator2DMLP
             except ImportError:
                 from robots.single_integrator2D import SingleIntegrator2DMLP
-            self.robot = SingleIntegrator2DMLP(dt, robot_spec, policy)
+            self.robot = SingleIntegrator2DMLP(dt, robot_spec, policy, device)
             # X0: [x, y]
             self.set_orientation(self.X[2, 0])
             self.X = self.X[0:2]
