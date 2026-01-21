@@ -153,7 +153,7 @@ class OptimalDecayCBFQP:
         self.u_ref.value = control_ref['u_ref']
 
         # Solve the optimization problem
-        self.cbf_controller.solve(solver=cp.GUROBI)
+        self.cbf_controller.solve(solver=cp.OSQP)
         self.status = self.cbf_controller.status
         
         return self.u.value
