@@ -4,11 +4,7 @@ import matplotlib.patches as patches
 
 from shapely.geometry import Polygon, Point, LineString
 from shapely import is_valid_reason
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-from utils.geometry import custom_merge
+from safe_control.utils.geometry import custom_merge
 
 """
 Created on June 21st, 2024
@@ -68,7 +64,7 @@ class BaseRobot:
             try:
                 from single_integrator2D import SingleIntegrator2D
             except ImportError:
-                from robots.single_integrator2D import SingleIntegrator2D
+                from safe_control.robots.single_integrator2D import SingleIntegrator2D
             self.robot = SingleIntegrator2D(dt, robot_spec)
             # X0: [x, y]
             self.set_orientation(self.X[2, 0])
@@ -95,7 +91,7 @@ class BaseRobot:
             try:
                 from double_integrator2D import DoubleIntegrator2D
             except ImportError:
-                from robots.double_integrator2D import DoubleIntegrator2D
+                from safe_control.robots.double_integrator2D import DoubleIntegrator2D
             self.robot = DoubleIntegrator2D(dt, robot_spec)
             # X0: [x, y, vx, vy, theta]
             self.set_orientation(self.X[4, 0])
@@ -104,58 +100,93 @@ class BaseRobot:
             try:
                 from unicycle2D import Unicycle2D
             except ImportError:
-                from robots.unicycle2D import Unicycle2D
+                from safe_control.robots.unicycle2D import Unicycle2D
             self.robot = Unicycle2D(dt, robot_spec)
             self.yaw = self.X[2, 0]
         elif self.robot_spec['model'] == 'DynamicUnicycle2D':
             try:
                 from dynamic_unicycle2D import DynamicUnicycle2D
             except ImportError:
-                from robots.dynamic_unicycle2D import DynamicUnicycle2D
+                from safe_control.robots.dynamic_unicycle2D import DynamicUnicycle2D
             self.robot = DynamicUnicycle2D(dt, robot_spec)
             self.yaw = self.X[2, 0]
         elif self.robot_spec['model'] == 'KinematicBicycle2D':
             try:
                 from kinematic_bicycle2D import KinematicBicycle2D
             except ImportError:
-                from robots.kinematic_bicycle2D import KinematicBicycle2D
+                from safe_control.robots.kinematic_bicycle2D import KinematicBicycle2D
             self.robot = KinematicBicycle2D(dt, robot_spec)
             self.yaw = self.X[2, 0]
         elif self.robot_spec['model'] == 'KinematicBicycle2D_C3BF':
             try:
                 from kinematic_bicycle2D_c3bf import KinematicBicycle2D_C3BF
             except ImportError:
-                from dynamic_env.kinematic_bicycle2D_c3bf import KinematicBicycle2D_C3BF
+                from safe_control.dynamic_env.kinematic_bicycle2D_c3bf import KinematicBicycle2D_C3BF
             self.robot = KinematicBicycle2D_C3BF(dt, robot_spec)
             self.yaw = self.X[2, 0]
         elif self.robot_spec['model'] == 'KinematicBicycle2D_DPCBF':
             try:
                 from kinematic_bicycle2D_dpcbf import KinematicBicycle2D_DPCBF
             except ImportError:
-                from dynamic_env.kinematic_bicycle2D_dpcbf import KinematicBicycle2D_DPCBF
+                from safe_control.dynamic_env.kinematic_bicycle2D_dpcbf import KinematicBicycle2D_DPCBF
             self.robot = KinematicBicycle2D_DPCBF(dt, robot_spec)
             self.yaw = self.X[2, 0]
         elif self.robot_spec['model'] == 'Quad2D':
             try:
                 from quad2D import Quad2D
             except ImportError:
-                from robots.quad2D import Quad2D
+                from safe_control.robots.quad2D import Quad2D
             self.robot = Quad2D(dt, robot_spec)
             self.yaw = self.X[2, 0] # it's pitch in this case
         elif self.robot_spec['model'] == 'Quad3D':
             try:
                 from quad3D import Quad3D
             except ImportError:
-                from robots.quad3D import Quad3D
+                from safe_control.robots.quad3D import Quad3D
             self.robot = Quad3D(dt, robot_spec)
             self.yaw = self.X[5, 0]
         elif self.robot_spec['model'] == 'VTOL2D':
             try:
                 from vtol2D import VTOL2D
             except ImportError:
-                from robots.vtol2D import VTOL2D
+                from safe_control.robots.vtol2D import VTOL2D
             self.robot = VTOL2D(dt, robot_spec)
             self.yaw = self.X[2, 0] # it's pitch in this case
+        elif self.robot_spec['model'] == 'Manipulator2D':
+            try:
+                from manipulator2D import Manipulator2D
+            except ImportError:
+                from safe_control.robots.manipulator2D import Manipulator2D
+            self.robot = Manipulator2D(dt, robot_spec)
+             # Manipulator state is [theta1, theta2, theta3]. Yaw is not really applicable or X[0]?
+             # BaseRobot expects self.yaw for visualization?
+             # Manipulator visualization is custom.
+            self.yaw = 0.0
+            
+            # Visualization Patches
+            # Parameters from index.html (SCALE = 60)
+            
+            self.link_lines = []
+            self.joint_circles = []
+            
+            # Base Circle
+            self.base_circle = ax.add_patch(plt.Circle((0,0), 12.0/60.0, color='#52525b', zorder=5))
+            
+            # Links and Joints
+            for i in range(3):
+                # Link: Line2D with round caps
+                line, = ax.plot([], [], color='#a1a1aa', lw=8, solid_capstyle='round', zorder=4)
+                self.link_lines.append(line)
+                
+                # Joint: Circle
+                # Last joint (EE) is different color in JS?
+                # JS: i === angles.length - 1 ? '#34d399' : '#71717a'
+                c_color = '#34d399' if i == 2 else '#71717a'
+                circle = ax.add_patch(plt.Circle((0,0), 6.0/60.0, color=c_color, zorder=6))
+                self.joint_circles.append(circle)
+                
+            # Gripper: C-shape (Line2D)
+            self.gripper_line, = ax.plot([], [], color='#34d399', lw=3, solid_capstyle='butt', zorder=7)
         else:
             raise ValueError("Invalid robot model")
 
@@ -291,8 +322,11 @@ class BaseRobot:
         self.unsafe_points_handle = ax.scatter(
             [], [], s=40, facecolors='r', edgecolors='r')
         # Robot's orientation axis represented as a line
-        self.axis,  = ax.plot([self.X[0, 0], self.X[0, 0]+self.vis_orient_len*np.cos(self.yaw)], [
-                      self.X[1, 0], self.X[1, 0]+self.vis_orient_len*np.sin(self.yaw)], color='r', linewidth=2)
+        if not self.robot_spec.get('no_heading', False):
+            self.axis,  = ax.plot([self.X[0, 0], self.X[0, 0]+self.vis_orient_len*np.cos(self.yaw)], [
+                          self.X[1, 0], self.X[1, 0]+self.vis_orient_len*np.sin(self.yaw)], color='r', linewidth=2)
+        else:
+            self.axis = None
         # Initialize FOV line handle with placeholder data
         self.fov, = ax.plot([], [], 'k--')  # Unpack the tuple returned by plot
         # Initialize FOV fill handle with placeholder data
@@ -327,6 +361,8 @@ class BaseRobot:
                 self.update_sensing_footprints()
 
     def get_position(self):
+        if self.robot_spec['model'] == 'Manipulator2D':
+            return self.robot.base_pos
         return self.X[0:2].reshape(-1)
     
     def get_z(self):
@@ -387,6 +423,8 @@ class BaseRobot:
             # these three have quite complex nominal input
             # so recommend to tune gains inside of each script
             return self.robot.nominal_input(self.X, goal)
+        elif self.robot_spec['model'] == 'Manipulator2D':
+             return self.robot.nominal_input(self.X, goal)
 
     def nominal_attitude_input(self, theta_des):
         if self.robot_spec['model'] in ['SingleIntegrator2D', 'DoubleIntegrator2D']:
@@ -482,14 +520,65 @@ class BaseRobot:
             self.velocity_text.set_position((base_x + self.max_indicator_width / 2,
                                             base_y + self.indicator_height + 0.2))
             self.velocity_text.set_text(f"{speed:.1f} m/s")
+        elif self.robot_spec['model'] == 'Manipulator2D':
+             P = self.robot.get_joint_positions(self.X)
+             total_angle = 0
+             
+             # Update Base
+             self.base_circle.center = P[0]
+             
+             for i in range(3):
+                 total_angle += self.X[i, 0]
+                 p_start = P[i]
+                 p_end = P[i+1]
+                 
+                 # Update Link Line
+                 self.link_lines[i].set_data([p_start[0], p_end[0]], [p_start[1], p_end[1]])
+                 
+                 # Update Joint Circle (at p_end)
+                 self.joint_circles[i].center = p_end
+                 
+             # Update Gripper (C-shape) at P[-1] with angle total_angle
+             # JS Logic:
+             # gripLen = 15, gripWidth = 22
+             
+             gripLen = 15.0 / 60.0
+             gripWidth = 22.0 / 60.0
+             x, y = P[-1][0], P[-1][1]
+             angle = total_angle
+             
+             perpX = -np.sin(angle)
+             perpY = np.cos(angle)
+             
+             backX = x
+             backY = y
+             topBackX = backX + perpX * gripWidth / 2
+             topBackY = backY + perpY * gripWidth / 2
+             botBackX = backX - perpX * gripWidth / 2
+             botBackY = backY - perpY * gripWidth / 2
+             
+             topFrontX = topBackX + np.cos(angle) * gripLen
+             topFrontY = topBackY + np.sin(angle) * gripLen
+             botFrontX = botBackX + np.cos(angle) * gripLen
+             botFrontY = botBackY + np.sin(angle) * gripLen
+             
+             # Points: TopFront -> TopBack -> BotBack -> BotFront
+             g_x = [topFrontX, topBackX, botBackX, botFrontX]
+             g_y = [topFrontY, topBackY, botBackY, botFrontY]
+             
+             self.gripper_line.set_data(g_x, g_y)
+             self.body.set_visible(False)
+             if self.axis is not None:
+                 self.axis.set_visible(False)
         else:
             # self.body.set_offsets([self.X[0, 0], self.X[1, 0]])
             self.body.center = self.X[0, 0], self.X[1, 0]
 
-        self.axis.set_ydata([self.X[1, 0], self.X[1, 0] +
-                            self.vis_orient_len*np.sin(self.yaw)])
-        self.axis.set_xdata([self.X[0, 0], self.X[0, 0] +
-                            self.vis_orient_len*np.cos(self.yaw)])
+        if self.axis is not None:
+             self.axis.set_ydata([self.X[1, 0], self.X[1, 0] +
+                                 self.vis_orient_len*np.sin(self.yaw)])
+             self.axis.set_xdata([self.X[0, 0], self.X[0, 0] +
+                                 self.vis_orient_len*np.cos(self.yaw)])
 
         if 'sensor' in self.robot_spec and self.robot_spec['sensor'] == 'rgbd':
             if len(self.unsafe_points) > 0:
@@ -714,7 +803,7 @@ class BaseRobot:
         center = (leftmost_most + rightmost_point) / 2
         radius = np.linalg.norm(rightmost_point - leftmost_most) / 2
 
-        self.detected_obs = [center[0], center[1], radius]
+        self.detected_obs = [center[0], center[1], radius, 0, 0, 0, 0]
         return self.detected_obs
 
     def calculate_fov_points(self):
