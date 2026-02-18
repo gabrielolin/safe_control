@@ -20,8 +20,8 @@ class CBFQP:
             self.cbf_param['alpha1'] = 1.5
             self.cbf_param['alpha2'] = 1.5
         elif self.robot_spec['model'] == 'KinematicBicycle2D':
-            self.cbf_param['alpha1'] = 1.5
-            self.cbf_param['alpha2'] = 1.5
+            self.cbf_param['alpha1'] = 0.5
+            self.cbf_param['alpha2'] = 0.5
         elif self.robot_spec['model'] == 'KinematicBicycle2D_C3BF':
             self.cbf_param['alpha'] = 1.5
         elif self.robot_spec['model'] == 'KinematicBicycle2D_DPCBF':
@@ -39,8 +39,8 @@ class CBFQP:
     def setup_control_problem(self):
         self.u = cp.Variable((2, 1))
         self.u_ref = cp.Parameter((2, 1), value=np.zeros((2, 1)))
-        self.A1 = cp.Parameter((self.num_obs, 2), value=np.zeros((self.num_obs, 2)))
-        self.b1 = cp.Parameter((self.num_obs, 1), value=np.zeros((self.num_obs, 1)))
+        self.A1 = cp.Parameter((self.num_obs+4, 2), value=np.zeros((self.num_obs+4, 2)))
+        self.b1 = cp.Parameter((self.num_obs+4, 1), value=np.zeros((self.num_obs+4, 1)))
         objective = cp.Minimize(cp.sum_squares(self.u - self.u_ref))
 
         if self.robot_spec['model'] == 'SingleIntegrator2D' or self.robot_spec['model'] == 'SingleIntegrator2DOpenLoop':
@@ -98,12 +98,13 @@ class CBFQP:
         self.cbf_controller = cp.Problem(objective, constraints)
 
     def solve_control_problem(self, robot_state, control_ref, obs_list):
+        print("control ref:", control_ref)
         # Reset constraint matrices to avoid stale values from previous solve
         self.A1.value[:] = 0
         self.b1.value[:] = 0
         
         if obs_list is None:
-            self.u_ref.value = control_ref['u_ref']
+            self.u_ref.value = control_ref
             if self.robot_spec['model'] in ['Quad3D']:
                  self.u_ref.value = np.vstack((self.u_ref.value, self.u_ref.value)) # Hack for Quad3D dimension mismatch if any
             self.status = 'optimal'
@@ -175,19 +176,37 @@ class CBFQP:
                          self.b1.value[row_idx, :] = dh_dot_dx @ self.robot.f() + gamma1 * h_dot + gamma2 * h
                 
                 row_idx += 1
-        
-        self.u_ref.value = control_ref['u_ref']
+                
+        h_list, dh_dx_list = self.robot.robot.agent_barrier_walls(robot_state, self.robot_spec['radius'])
+
+        for h, dh_dx in zip(h_list, dh_dx_list):
+            if row_idx >= self.num_obs + 4:
+                break
+            self.A1.value[row_idx,:] = dh_dx @ self.robot.g()
+            self.b1.value[row_idx,:] = dh_dx @ self.robot.f() + self.cbf_param['alpha'] * h
+            row_idx += 1
+
+        self.u_ref.value = control_ref.reshape(-1, 1)
 
         # 4. Solve this yields a new 'self.u'
 
-        self.cbf_controller.solve(solver=cp.OSQP)
+        self.cbf_controller.solve(
+            solver=cp.OSQP
+        )
 
-
-        # print(f'h: {h} | value: {self.A1.value[0,:] @ self.u.value + self.b1.value[0,:]}')
+        print(f"CBF-QP status: {self.cbf_controller.status}")
+        if self.cbf_controller.status in ['optimal', 'optimal_inaccurate', 'solved']:
+            print("norm of u to u_ref:", np.linalg.norm(self.u.value - self.u_ref.value))
+        else:
+            print(f"CBF-QP failed to solve: {self.cbf_controller.status}")
+            return self.u_ref.value.flatten()  # Return reference control if QP fails
+        #print(f'h: {h} | value: {self.A1.value[0,:] @ self.u.value + self.b1.value[0,:]}')
         
         # Check QP error in tracking.py
         self.status = self.cbf_controller.status
-        # if self.cbf_controller.status != 'optimal':
-        #     raise QPError("CBF-QP optimization failed")
+        #print(f"CBF-QP status: {self.cbf_controller.status}")
+        #if self.cbf_controller.status != 'optimal':
+            #print(f"CBF-QP failed to solve: {self.cbf_controller.status}")
+            #raise Exception("CBF-QP optimization failed")
 
-        return self.u.value
+        return self.u.value.flatten()

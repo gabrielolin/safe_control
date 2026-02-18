@@ -27,7 +27,7 @@ def angle_normalize(x):
 
 class BaseRobot:
 
-    def __init__(self, X0, robot_spec, dt, ax, policy=None, device='cpu'):
+    def __init__(self, X0, robot_spec, dt, ax = None, policy=None, device='cpu'):
         '''
         X0: initial state
         dt: simulation time step
@@ -192,7 +192,7 @@ class BaseRobot:
 
         self.U = np.array([0, 0]).reshape(-1, 1)
         self.U_att = np.array([0]).reshape(-1, 1)
-
+        """
         # Plot handles
         self.vis_orient_len = 0.5
         if self.robot_spec['model'] in ['KinematicBicycle2D', 'KinematicBicycle2D_C3BF', 'KinematicBicycle2D_DPCBF']:
@@ -310,23 +310,25 @@ class BaseRobot:
             )
 
 
-        else:
+        #else:
             # Robot's body represented as a scatter plot
             # self.body = ax.scatter(
             #     [], [], s=200, facecolors=color, edgecolors=color)  this is unitless
-            self.body = ax.add_patch(plt.Circle(
-                (0, 0), self.robot_radius, edgecolor='black', facecolor=color, fill=True))
+            #self.body = ax.add_patch(plt.Circle(
+            #    (0, 0), self.robot_radius, edgecolor='black', facecolor=color, fill=True))
         
         # Store the unsafe points and scatter plot
         self.unsafe_points = []
         self.unsafe_points_handle = ax.scatter(
             [], [], s=40, facecolors='r', edgecolors='r')
         # Robot's orientation axis represented as a line
+        
         if not self.robot_spec.get('no_heading', False):
             self.axis,  = ax.plot([self.X[0, 0], self.X[0, 0]+self.vis_orient_len*np.cos(self.yaw)], [
                           self.X[1, 0], self.X[1, 0]+self.vis_orient_len*np.sin(self.yaw)], color='r', linewidth=2)
         else:
             self.axis = None
+
         # Initialize FOV line handle with placeholder data
         self.fov, = ax.plot([], [], 'k--')  # Unpack the tuple returned by plot
         # Initialize FOV fill handle with placeholder data
@@ -346,7 +348,7 @@ class BaseRobot:
         self.sensing_footprints = Polygon()
         self.safety_area = Polygon()  # preserve the union of all the safety areas
         self.positions = []  # List to store the positions for plotting
-
+        
         # initialize the sensing_footprints with the initial robot location with radius 1
         init_robot_position = Point(self.X[0, 0], self.X[1, 0]).buffer(self.robot_radius*2)
 
@@ -359,6 +361,7 @@ class BaseRobot:
                 init_robot_position)
             if 'sensor' in self.robot_spec and self.robot_spec['sensor'] == 'rgbd':
                 self.update_sensing_footprints()
+        """
 
     def get_position(self):
         if self.robot_spec['model'] == 'Manipulator2D':

@@ -1,5 +1,7 @@
 import numpy as np
 import cvxpy as cp
+from qpth.qp import QPFunction, QPSolvers
+from networks.policies import QPNetwork
 
 class NotCompatibleError(Exception):
     '''
@@ -11,10 +13,12 @@ class NotCompatibleError(Exception):
         super().__init__(self.message)
         
 class OptimalDecayCBFQP:
-    def __init__(self, robot, robot_spec, num_obs=1):
+    def __init__(self, robot, robot_spec, num_obs=1, max_obs_constraints=5):
         self.robot = robot
         self.robot_spec = robot_spec
         self.num_obs = num_obs
+        self.max_obs_constraints = max_obs_constraints
+
         if self.robot_spec['model'] == 'DynamicUnicycle2D': # TODO: not compatible with other robot models yet
             self.cbf_param = {}
             self.cbf_param['alpha1'] = 0.5
@@ -56,13 +60,15 @@ class OptimalDecayCBFQP:
 
     def setup_control_problem(self):
         self.u = cp.Variable((2, 1))
+        self.Q_net = QPNetwork(self.robot_spec, self.max_obs_constraints)
+        self.Q = cp
         self.u_ref = cp.Parameter((2, 1), value=np.zeros((2, 1)))
         self.omega1 = cp.Variable((1, 1))  # Optimal-decay parameter
         self.omega2 = cp.Variable((1, 1))  # Optimal-decay parameter
-        self.A1 = cp.Parameter((self.num_obs+4, 2), value=np.zeros((self.num_obs+4, 2)))
-        self.b1 = cp.Parameter((self.num_obs+4, 1), value=np.zeros((self.num_obs+4, 1)))
-        self.h = cp.Parameter((self.num_obs+4, 1), value=np.zeros((self.num_obs+4, 1)))
-        self.h_dot = cp.Parameter((self.num_obs+4, 1), value=np.zeros((self.num_obs+4, 1)))
+        self.A1 = cp.Parameter((self.max_obs_constraints+4, 2), value=np.zeros((self.max_obs_constraints+4, 2)))
+        self.b1 = cp.Parameter((self.max_obs_constraints+4, 1), value=np.zeros((self.max_obs_constraints+4, 1)))
+        self.h = cp.Parameter((self.max_obs_constraints+4, 1), value=np.zeros((self.max_obs_constraints+4, 1)))
+        self.h_dot = cp.Parameter((self.max_obs_constraints+4, 1), value=np.zeros((self.max_obs_constraints+4, 1)))
         
         if self.robot_spec['model'] in ['KinematicBicycle2D_C3BF', 'Quad3D']:
             objective = cp.Minimize(

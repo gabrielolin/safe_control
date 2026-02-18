@@ -48,7 +48,7 @@ class KinematicBicycle2D_DPCBF(KinematicBicycle2D):
                         [obs_vel_y - v * np.sin(theta)]])
         # Compute norms
         p_rel_mag = np.linalg.norm(p_rel)
-        v_rel_mag = np.linalg.norm(v_rel)
+        v_rel_mag = np.maximum(np.linalg.norm(v_rel), 1e-6)
 
         p_rel_x = p_rel[0, 0]
         p_rel_y = p_rel[1, 0]
@@ -82,6 +82,23 @@ class KinematicBicycle2D_DPCBF(KinematicBicycle2D):
         dh_dx[0, 3] = - np.cos(rot_angle-theta) - self.k_lambda * np.sqrt(d_safe) / v_rel_mag**3 * (v - obs_vel_x * np.cos(theta) - obs_vel_y * np.sin(theta)) * v_rel_new_y**2 - 2 * self.k_lambda * np.sqrt(d_safe) * v_rel_new_y * np.sin(rot_angle-theta) / v_rel_mag
 
         return h, dh_dx
+    
+    def agent_barrier_walls(self, X,  robot_radius, x_lim = [0,20], y_lim = [0,20]):
+        '''Continuous Time C3BF for walls'''
+        # Define the walls as obstacles
+
+        h1 = X[0, 0] - x_lim[0] - robot_radius
+        h2 = x_lim[1] - X[0, 0] - robot_radius
+        h3 = X[1, 0] - y_lim[0] - robot_radius
+        h4 = y_lim[1] - X[1, 0] - robot_radius
+        h_list = np.array([h1, h2, h3, h4])
+        dh_dx1 = np.array([1, 0, 0, 0])
+        dh_dx2 = np.array([-1, 0, 0, 0])
+        dh_dx3 = np.array([0, 1, 0, 0])
+        dh_dx4 = np.array([0, -1, 0, 0])
+        dh_dx_list = [dh_dx1, dh_dx2, dh_dx3, dh_dx4]
+
+        return h_list, dh_dx_list
 
     def agent_barrier_dt(self, x_k, u_k, obs, robot_radius, s=1.05):
         '''Discrete Time DPCBF'''

@@ -69,10 +69,34 @@ class KinematicBicycle2D_C3BF(KinematicBicycle2D):
         dh_dx = np.zeros((1, 4))
         dh_dx[0, 0] = -v_rel_x - v_rel_mag * p_rel_x / (sqrt_term + eps) 
         dh_dx[0, 1] = -v_rel_y - v_rel_mag * p_rel_y / (sqrt_term + eps)
-        dh_dx[0, 2] =  v * np.sin(theta) * p_rel_x - v * np.cos(theta) * p_rel_y + (sqrt_term + eps) / v_rel_mag * (v * (obs_vel_x * np.sin(theta) - obs_vel_y * np.cos(theta)))
-        dh_dx[0, 3] = -np.cos(theta) * p_rel_x -np.sin(theta) * p_rel_y + (sqrt_term + eps) / v_rel_mag * (v - (obs_vel_x * np.cos(theta) + obs_vel_y * np.sin(theta)))
+
+        # Add epsilon to v_rel_mag to prevent division by zero
+        v_rel_mag_safe = v_rel_mag + eps
+
+        dh_dx[0, 2] = (v * np.sin(theta) * p_rel_x - v * np.cos(theta) * p_rel_y 
+                    + sqrt_term / v_rel_mag_safe * (v * (obs_vel_x * np.sin(theta) - obs_vel_y * np.cos(theta))))
+
+        dh_dx[0, 3] = (-np.cos(theta) * p_rel_x - np.sin(theta) * p_rel_y 
+                    + sqrt_term / v_rel_mag_safe * (v - (obs_vel_x * np.cos(theta) + obs_vel_y * np.sin(theta))))
 
         return h, dh_dx
+
+    def agent_barrier_walls(self, X,  robot_radius, x_lim = [0,20], y_lim = [0,20]):
+        '''Continuous Time C3BF for walls'''
+        # Define the walls as obstacles
+
+        h1 = X[0, 0] - x_lim[0] - robot_radius
+        h2 = x_lim[1] - X[0, 0] - robot_radius
+        h3 = X[1, 0] - y_lim[0] - robot_radius
+        h4 = y_lim[1] - X[1, 0] - robot_radius
+        h_list = np.array([h1, h2, h3, h4])
+        dh_dx1 = np.array([1, 0, 0, 0])
+        dh_dx2 = np.array([-1, 0, 0, 0])
+        dh_dx3 = np.array([0, 1, 0, 0])
+        dh_dx4 = np.array([0, -1, 0, 0])
+        dh_dx_list = [dh_dx1, dh_dx2, dh_dx3, dh_dx4]
+
+        return h_list, dh_dx_list
 
     def agent_barrier_dt(self, x_k, u_k, obs, robot_radius, beta=1.01):
         '''Discrete Time C3BF'''
