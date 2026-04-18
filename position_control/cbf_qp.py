@@ -25,7 +25,7 @@ class CBFQP:
         elif self.robot_spec['model'] == 'KinematicBicycle2D_C3BF':
             self.cbf_param['alpha'] = 1.5
         elif self.robot_spec['model'] == 'KinematicBicycle2D_DPCBF':
-            self.cbf_param['alpha'] = 1.5
+            self.cbf_param['alpha'] = 9.5
         elif self.robot_spec['model'] == 'Quad2D':
             self.cbf_param['alpha1'] = 1.5
             self.cbf_param['alpha2'] = 1.5
@@ -61,8 +61,8 @@ class CBFQP:
                            cp.abs(self.u[1]) <= self.robot_spec['a_max']]
         elif 'KinematicBicycle2D' in self.robot_spec['model']:
             constraints = [self.A1 @ self.u + self.b1 >= 0,
-                           cp.abs(self.u[0]) <= self.robot_spec['a_max'],
-                           cp.abs(self.u[1]) <= self.robot_spec['beta_max']]
+                           cp.abs(self.u[0]) <= 100*self.robot_spec['a_max'],
+                           cp.abs(self.u[1]) <= 100*self.robot_spec['beta_max']]
         elif self.robot_spec['model'] == 'Quad2D':
             constraints = [self.A1 @ self.u + self.b1 >= 0,
                            self.robot_spec["f_min"] <= self.u[0],
@@ -110,7 +110,8 @@ class CBFQP:
             self.status = 'optimal'
             return self.u_ref.value
 
-        mode = self.robot_spec.get('cbf_mode', 'cbf')
+       # mode = self.robot_spec.get('cbf_mode', 'cbf')
+        mode= 'hard'
         row_idx = 0
         for i, obs in enumerate(obs_list):
             if obs is None:
@@ -176,7 +177,7 @@ class CBFQP:
                          self.b1.value[row_idx, :] = dh_dot_dx @ self.robot.f() + gamma1 * h_dot + gamma2 * h
                 
                 row_idx += 1
-                
+        """      
         h_list, dh_dx_list = self.robot.robot.agent_barrier_walls(robot_state, self.robot_spec['radius'])
 
         for h, dh_dx in zip(h_list, dh_dx_list):
@@ -185,7 +186,7 @@ class CBFQP:
             self.A1.value[row_idx,:] = dh_dx @ self.robot.g()
             self.b1.value[row_idx,:] = dh_dx @ self.robot.f() + self.cbf_param['alpha'] * h
             row_idx += 1
-
+        """
         self.u_ref.value = control_ref.reshape(-1, 1)
 
         # 4. Solve this yields a new 'self.u'
